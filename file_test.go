@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/net/context"
 
-	. "github.com/bbengfort/memfs"
+	. "github.com/beeleelee/memfs"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"

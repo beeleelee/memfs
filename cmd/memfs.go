@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/bbengfort/memfs"
+	"github.com/beeleelee/memfs"
 	"github.com/urfave/cli"
 )
 

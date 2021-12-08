@@ -1,7 +1,7 @@
 package memfs_test
 
 import (
-	. "github.com/bbengfort/memfs"
+	. "github.com/beeleelee/memfs"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
