@@ -8,35 +8,14 @@ import (
 	"golang.org/x/net/context"
 )
 
-//===========================================================================
-// Dir Type and Constructor
-//===========================================================================
-
-// File implements Node and Handler interfaces for file (data containing)
-// objects in MemFs. Data is allocated directly in the file object, and is
-// not chunked or broken up until transport.
-type File struct {
-	Node
-	Data  []byte // Actual data contained by the File
-	dirty bool   // If data has been written but not flushed
-}
-
 // Init the file and create the data array
-func (f *File) Init(name string, mode os.FileMode, parent *Dir, memfs *FileSystem) {
+func NewFile(name string, mode os.FileMode, parent *Node, memfs *FileSystem) *Node {
 	// Init the embedded node.
-	f.Node.Init(name, mode, parent, memfs)
+	f := NewNode(name, mode, parent, memfs)
 
 	// Make the data array
 	f.Data = make([]byte, 0, 0)
-}
-
-//===========================================================================
-// File Methods
-//===========================================================================
-
-// GetNode returns a pointer to the embedded Node object
-func (f *File) GetNode() *Node {
-	return &f.Node
+	return f
 }
 
 //===========================================================================
@@ -53,7 +32,7 @@ func (f *File) GetNode() *Node {
 // unless req.Valid.Mode() is true.
 //
 // https://godoc.org/bazil.org/fuse/fs#NodeSetattrer
-func (f *File) Setattr(ctx context.Context, req *fuse.SetattrRequest, resp *fuse.SetattrResponse) error {
+func (f *Node) Setattr(ctx context.Context, req *fuse.SetattrRequest, resp *fuse.SetattrResponse) error {
 	if f.fs.readonly {
 		return fuse.EPERM
 	}
@@ -69,15 +48,14 @@ func (f *File) Setattr(ctx context.Context, req *fuse.SetattrRequest, resp *fuse
 		f.fs.Unlock() // Must unlock before Node.Setattr is called!
 	}
 
-	// Now use the embedded Node's Setattr method.
-	return f.Node.Setattr(ctx, req, resp)
+	return f.setattr(ctx, req, resp)
 }
 
 // Fsync must be defined or edting with vim or emacs fails.
 // Implements NodeFsyncer, which has no associated documentation.
 //
 // https://godoc.org/bazil.org/fuse/fs#NodeFsyncer
-func (f *File) Fsync(ctx context.Context, req *fuse.FsyncRequest) error {
+func (f *Node) Fsync(ctx context.Context, req *fuse.FsyncRequest) error {
 	f.fs.Lock()
 	defer f.fs.Unlock()
 
@@ -96,7 +74,7 @@ func (f *File) Fsync(ctx context.Context, req *fuse.FsyncRequest) error {
 // Because this is an in-memory system, Flush is basically ignored.
 //
 // https://godoc.org/bazil.org/fuse/fs#HandleFlusher
-func (f *File) Flush(ctx context.Context, req *fuse.FlushRequest) error {
+func (f *Node) Flush(ctx context.Context, req *fuse.FlushRequest) error {
 	logger.Infof("flush file %d (dirty: %t, contains %d bytes with size %d)", f.ID, f.dirty, len(f.Data), f.Attrs.Size)
 
 	if f.fs.readonly {
@@ -149,7 +127,7 @@ func (f *File) Flush(ctx context.Context, req *fuse.FlushRequest) error {
 // even attempted (except in OpenDirectIO mode).
 //
 // https://godoc.org/bazil.org/fuse/fs#HandleReader
-func (f *File) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
+func (f *Node) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
 	f.fs.Lock()
 	defer f.fs.Unlock()
 
@@ -190,7 +168,7 @@ func (f *File) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadR
 // Setattr.
 //
 // https://godoc.org/bazil.org/fuse/fs#HandleWriter
-func (f *File) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.WriteResponse) error {
+func (f *Node) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.WriteResponse) error {
 	if f.fs.readonly {
 		return fuse.EPERM
 	}

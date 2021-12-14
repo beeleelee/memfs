@@ -9,23 +9,14 @@ import (
 	"golang.org/x/net/context"
 )
 
-type Dir struct {
-	Node
-	Children map[string]Entity // Contents of the directory
-}
-
 // Init the directory with the required properties for the directory.
-func (d *Dir) Init(name string, mode os.FileMode, parent *Dir, memfs *FileSystem) {
+func NewDir(name string, mode os.FileMode, parent *Node, memfs *FileSystem) *Node {
 	// Make sure the mode is a directory, then init the node.
 	mode = os.ModeDir | mode
-	d.Node.Init(name, mode, parent, memfs)
-
+	d := NewNode(name, mode, parent, memfs)
 	// Make the children mapping
-	d.Children = make(map[string]Entity)
-}
-
-func (d *Dir) GetNode() *Node {
-	return &d.Node
+	d.Children = make(map[string]*Node)
+	return d
 }
 
 //===========================================================================
@@ -37,7 +28,7 @@ func (d *Dir) GetNode() *Node {
 // for fuse.CreateRequest say create and open a file (not a directory).
 //
 // https://godoc.org/bazil.org/fuse/fs#NodeCreater
-func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.CreateResponse) (fs.Node, fs.Handle, error) {
+func (d *Node) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.CreateResponse) (fs.Node, fs.Handle, error) {
 	if d.fs.readonly {
 		return nil, nil, fuse.EPERM
 	}
@@ -49,8 +40,7 @@ func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.Cr
 	d.Attrs.Atime = time.Now()
 
 	// Create the file
-	f := new(File)
-	f.Init(req.Name, req.Mode, d, d.fs)
+	f := NewFile(req.Name, req.Mode, d, d.fs)
 
 	// Set the file's UID and GID to that of the caller
 	f.Attrs.Uid = req.Header.Uid
@@ -85,7 +75,7 @@ func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.Cr
 // Mkdir creates (but not opens) a directory in the given directory.
 //
 // https://godoc.org/bazil.org/fuse/fs#NodeMkdirer
-func (d *Dir) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, error) {
+func (d *Node) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, error) {
 	if d.fs.readonly {
 		return nil, fuse.EPERM
 	}
@@ -99,8 +89,7 @@ func (d *Dir) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, error
 	// TODO: Allow for the creation of archive directories
 
 	// Create the child directory
-	c := new(Dir)
-	c.Init(req.Name, req.Mode, d, d.fs)
+	c := NewDir(req.Name, req.Mode, d, d.fs)
 
 	// Set the directory's UID and GID to that of the caller
 	c.Attrs.Uid = req.Header.Uid
@@ -133,7 +122,7 @@ func (d *Dir) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, error
 // or to a directory (rmdir).
 //
 // https://godoc.org/bazil.org/fuse/fs#NodeRemover
-func (d *Dir) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
+func (d *Node) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
 	if d.fs.readonly {
 		return fuse.EPERM
 	}
@@ -144,7 +133,7 @@ func (d *Dir) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
 	// Update the directory Atime
 	d.Attrs.Atime = time.Now()
 
-	var ent Entity
+	var ent *Node
 	var ok bool
 
 	// Get the node from the directory by name.
@@ -154,7 +143,7 @@ func (d *Dir) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
 	}
 
 	// Do not remove a directory that contains files.
-	if ent.IsDir() && len(ent.(*Dir).Children) > 0 {
+	if ent.IsDir() && len(ent.Children) > 0 {
 		logger.Debugf("(error) will not remove non-empty directory %q in %q", req.Name, d.Path())
 		return fuse.EIO
 	}
@@ -181,7 +170,7 @@ func (d *Dir) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
 // Implemented to move the entry by name from the dir to the newDir.
 //
 // https://godoc.org/bazil.org/fuse/fs#NodeRenamer
-func (d *Dir) Rename(ctx context.Context, req *fuse.RenameRequest, newDir fs.Node) error {
+func (d *Node) Rename(ctx context.Context, req *fuse.RenameRequest, newDir fs.Node) error {
 	if d.fs.readonly {
 		return fuse.EPERM
 	}
@@ -192,14 +181,13 @@ func (d *Dir) Rename(ctx context.Context, req *fuse.RenameRequest, newDir fs.Nod
 	// Update the directory Atime
 	d.Attrs.Atime = time.Now()
 
-	var dst *Dir
+	var dst *Node
 	var ok bool
-	var ent Entity
 	var node *Node
 
 	// Convert newDir to an actual Dir object
-	if dst, ok = newDir.(*Dir); !ok {
-		logger.Debugf("(error) could not convert %q to a directory", newDir)
+	if dst, ok = newDir.(*Node); !ok || !dst.IsDir() {
+		logger.Debugf("(error) could not convert %q to a dir", newDir)
 		return fuse.EEXIST
 	}
 
@@ -207,23 +195,22 @@ func (d *Dir) Rename(ctx context.Context, req *fuse.RenameRequest, newDir fs.Nod
 	dst.Attrs.Atime = time.Now()
 
 	// Get the child entity from the directory
-	if ent, ok = d.Children[req.OldName]; !ok {
+	if node, ok = d.Children[req.OldName]; !ok {
 		logger.Debugf("(error) could not find %q in %q to move", req.OldName, d.Path())
 		return fuse.EEXIST
 	}
 
 	// Get the node from the entity and update attrs.
-	node = ent.GetNode()
 	node.Name = req.NewName
 	node.Attrs.Mtime = time.Now()
 
-	dst.Children[req.NewName] = ent // Add the entity to the new directory
+	dst.Children[req.NewName] = node // Add the entity to the new directory
 	dst.Attrs.Mtime = time.Now()
 
 	delete(dst.Children, req.OldName) // Delete the entity from the old directory
 	d.Attrs.Mtime = time.Now()
 
-	logger.Infof("moved %q from %q to %q", req.OldName, d.Path(), ent.Path())
+	logger.Infof("moved %q from %q to %q", req.OldName, d.Path(), node.Path())
 	return nil
 }
 
@@ -237,7 +224,7 @@ func (d *Dir) Rename(ctx context.Context, req *fuse.RenameRequest, newDir fs.Nod
 // https://godoc.org/bazil.org/fuse/fs#NodeStringLookuper
 // NOTE: implemented NodeStringLookuper rather than NodeRequestLookuper
 // https://godoc.org/bazil.org/fuse/fs#NodeRequestLookuper
-func (d *Dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
+func (d *Node) Lookup(ctx context.Context, name string) (fs.Node, error) {
 
 	d.fs.Lock()
 	defer d.fs.Unlock()
@@ -248,11 +235,7 @@ func (d *Dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
 	if ent, ok := d.Children[name]; ok {
 		logger.Debugf("lookup %s in %s", name, d.Path())
 
-		if ent.IsDir() {
-			return ent.(*Dir), nil
-		}
-
-		return ent.(*File), nil
+		return ent, nil
 	}
 
 	logger.Debugf("(error) couldn't lookup %s in %s", name, d.Path())
@@ -276,7 +259,7 @@ func (d *Dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
 // Dirent objects - which specify the internal contents of the directory.
 //
 // https://godoc.org/bazil.org/fuse/fs#HandleReadDirAller
-func (d *Dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
+func (d *Node) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	contents := make([]fuse.Dirent, 0, len(d.Children))
 
 	d.fs.Lock()
@@ -286,8 +269,7 @@ func (d *Dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	d.Attrs.Atime = time.Now()
 
 	// Create the Dirent response
-	for _, entity := range d.Children {
-		node := entity.GetNode()
+	for _, node := range d.Children {
 		dirent := fuse.Dirent{
 			Inode: node.Attrs.Inode,
 			Type:  node.FuseType(),

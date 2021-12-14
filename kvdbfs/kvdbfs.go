@@ -40,8 +40,7 @@ func New(mount string, config *Config) *FileSystem {
 	fs.readonly = fs.Config.ReadOnly
 
 	// Create the root directory
-	fs.root = new(Dir)
-	fs.root.Init("/", 0755, nil, fs)
+	fs.root = NewDir("/", 0755, nil, fs)
 
 	// Return the file system
 	return fs
@@ -59,7 +58,7 @@ type FileSystem struct {
 	Config     *Config            // Configuration of the FileSystem
 	Conn       *fuse.Conn         // Hook to the FUSE connection object
 	Sequence   *sequence.Sequence // Monotonically increasing counter for inodes
-	root       *Dir               // The root of the file system
+	root       *Node              // The root of the file system
 	uid        uint32             // The user id of the process running the file system
 	gid        uint32             // The group id of the process running the file system
 	nfiles     uint64             // The number of files in the file system

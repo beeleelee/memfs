@@ -12,24 +12,21 @@ import (
 
 type XAttr map[string][]byte
 
-type Entity interface {
-	IsDir() bool               // Returns true if the entity is a directory
-	FuseType() fuse.DirentType // Returns the fuse type for listing
-	Path() string              // Returns the full path to the entity
-	GetNode() *Node            // Returns the node for the entity type
-}
-
 type Node struct {
-	ID     uint64      // Unique ID of the Node
-	Name   string      // Name of the Node
-	Attrs  fuse.Attr   // Node attributes and permissions
-	XAttrs XAttr       // Extended attributes on the node
-	Parent *Dir        // Parent directory of the Node
-	fs     *FileSystem // Stored reference to the file system
+	ID       uint64           // Unique ID of the Node
+	Name     string           // Name of the Node
+	Attrs    fuse.Attr        // Node attributes and permissions
+	XAttrs   XAttr            // Extended attributes on the node
+	Parent   *Node            // Parent directory of the Node
+	fs       *FileSystem      // Stored reference to the file system
+	Data     []byte           // Actual data contained by the File
+	dirty    bool             // If data has been written but not flushed
+	Children map[string]*Node // Contents of the directory
 }
 
 // Init a Node with the required properties for storage in the file system.
-func (n *Node) Init(name string, mode os.FileMode, parent *Dir, fs *FileSystem) {
+func NewNode(name string, mode os.FileMode, parent *Node, fs *FileSystem) *Node {
+	n := &Node{}
 	// Manage the Node properties
 	n.ID, _ = fs.Sequence.Next()
 	n.Name = name
@@ -52,6 +49,7 @@ func (n *Node) Init(name string, mode os.FileMode, parent *Dir, fs *FileSystem) 
 	n.Attrs.Gid = fs.gid // group gid
 
 	logger.Infof("initialized node %d, %q", n.ID, n.Name)
+	return n
 }
 
 func (n *Node) IsDir() bool {
@@ -71,10 +69,6 @@ func (n *Node) Path() string {
 		return filepath.Join(n.Parent.Path(), n.Name)
 	}
 	return n.Name
-}
-
-func (n *Node) GetNode() *Node {
-	return n
 }
 
 func (n *Node) String() string {
@@ -245,7 +239,7 @@ func (n *Node) Removexattr(ctx context.Context, req *fuse.RemovexattrRequest) er
 // unless req.Valid.Mode() is true.
 //
 // https://godoc.org/bazil.org/fuse/fs#NodeSetattrer
-func (n *Node) Setattr(ctx context.Context, req *fuse.SetattrRequest, resp *fuse.SetattrResponse) error {
+func (n *Node) setattr(ctx context.Context, req *fuse.SetattrRequest, resp *fuse.SetattrResponse) error {
 	if n.fs.readonly {
 		return fuse.EPERM
 	}
