@@ -1,6 +1,7 @@
 package kvdbfs
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"time"
@@ -22,6 +23,7 @@ type Node struct {
 	Data     []byte           // Actual data contained by the File
 	dirty    bool             // If data has been written but not flushed
 	Children map[string]*Node // Contents of the directory
+	Ents     map[string]*fuse.Dirent
 }
 
 // Init a Node with the required properties for storage in the file system.
@@ -348,4 +350,55 @@ func (n *Node) Setxattr(ctx context.Context, req *fuse.SetxattrRequest) error {
 	logger.Debugf("setting xattr named %s on node %d", req.Name, n.ID)
 	n.XAttrs[req.Name] = req.Xattr
 	return nil
+}
+
+func dryNode(n *Node) *Node {
+	res := &Node{}
+	res.ID = n.ID
+	res.Name = n.Name
+	res.Attrs = n.Attrs
+	res.XAttrs = n.XAttrs
+	res.Data = n.Data
+	if n.IsDir() {
+		res.Ents = n.Ents
+		// for name, node := range n.Children {
+		// 	res.Ents[name] = &fuse.Dirent{
+		// 		Inode: node.Attrs.Inode,
+		// 		Type:  node.FuseType(),
+		// 		Name:  node.Name,
+		// 	}
+		// }
+	}
+	return res
+}
+
+func (n *Node) Bytes() ([]byte, error) {
+	return json.Marshal(dryNode(n))
+}
+
+func NodeFromBytes(data []byte, parent *Node, fs *FileSystem) (*Node, error) {
+	rec := &Node{}
+
+	if err := json.Unmarshal(data, rec); err != nil {
+		return nil, err
+	}
+	logger.Infof("NodeFrombytes: id: %d, name: %s, child: %v", rec.ID, rec.Name, rec.Children)
+	if rec.IsDir() {
+		rec.Children = make(map[string]*Node)
+	}
+	rec.Parent = parent
+	rec.fs = fs
+	return rec, nil
+}
+
+func (n *Node) sync() error {
+	k := n.Path()
+
+	v, err := n.Bytes()
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("sync item: %s, v: %s", k, v)
+	return n.fs.kv.Put(k, v)
 }

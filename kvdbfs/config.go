@@ -5,12 +5,21 @@ import (
 	"io/ioutil"
 )
 
+type MetaStoreConf struct {
+	Dir         string `json:"dir"` // path to metastore
+	SegmentSize int64  `json:"segment_size"`
+	Prefix      string `json:"prefix"`
+	FSRoot      string `json:"fs_root"`
+	FSInfo      string `json:"fs_info"`
+}
+
 // Config implements the local configuration directives.
 type Config struct {
-	Name     string `json:"name"`      // Identifier for replica lists
-	LogLevel string `json:"log_level"` // Minimum level to log at (debug, info, warn, error, critical)
-	ReadOnly bool   `json:"readonly"`  // Whether or not the FS is read only
-	Path     string `json:"-"`         // Path the config was loaded from
+	Name      string        `json:"name"`      // Identifier for replica lists
+	LogLevel  string        `json:"log_level"` // Minimum level to log at (debug, info, warn, error, critical)
+	ReadOnly  bool          `json:"readonly"`  // Whether or not the FS is read only
+	Path      string        `json:"-"`         // Path the config was loaded from
+	MetaStore MetaStoreConf `json:"meta_store"`
 }
 
 //===========================================================================

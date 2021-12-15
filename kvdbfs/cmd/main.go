@@ -51,10 +51,6 @@ func main() {
 			Name:  "name, N",
 			Usage: "specify name of host, uses os hostname by default",
 		},
-		cli.Uint64Flag{
-			Name:  "cache, C",
-			Usage: "specify maximum cache size in bytes, 4GB by default",
-		},
 		cli.StringFlag{
 			Name:  "level, L",
 			Usage: "specify minimum log level, INFO by default",
@@ -89,6 +85,7 @@ func runfs(c *cli.Context) error {
 	if config, err = makeConfig(cpath); err != nil {
 		return cli.NewExitError(err.Error(), 1)
 	}
+	fmt.Printf("%v\n", *config)
 
 	// Update the configuration with command line options
 	if c.String("name") != "" {
@@ -104,7 +101,10 @@ func runfs(c *cli.Context) error {
 	}
 
 	// Create the new file system
-	fs = kvdbfs.New(mountPath, config)
+	fs, err = kvdbfs.New(mountPath, config)
+	if err != nil {
+		return err
+	}
 
 	// Handle interrupts
 	go signalHandler()

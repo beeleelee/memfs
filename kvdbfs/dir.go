@@ -2,6 +2,7 @@ package kvdbfs
 
 import (
 	"os"
+	"path/filepath"
 	"time"
 
 	"bazil.org/fuse"
@@ -16,6 +17,7 @@ func NewDir(name string, mode os.FileMode, parent *Node, memfs *FileSystem) *Nod
 	d := NewNode(name, mode, parent, memfs)
 	// Make the children mapping
 	d.Children = make(map[string]*Node)
+	d.Ents = make(map[string]*fuse.Dirent)
 	return d
 }
 
@@ -48,13 +50,19 @@ func (d *Node) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.C
 
 	// Add the file to the directory
 	d.Children[f.Name] = f
+	d.Ents[f.Name] = &fuse.Dirent{
+		Inode: f.Attrs.Inode,
+		Name:  f.Name,
+		Type:  f.FuseType(),
+	}
 
 	// Update the directory Mtime
 	d.Attrs.Mtime = time.Now()
 
 	// Update the file system state
 	d.fs.nfiles++
-
+	d.sync()
+	d.fs.sync()
 	// Log the file creation and return the file, which is both node and handle.
 	logger.Infof("create %q in %q, mode %v", f.Name, d.Path(), req.Mode)
 	return f, f, nil
@@ -97,13 +105,19 @@ func (d *Node) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, erro
 
 	// Add the directory to the directory
 	d.Children[c.Name] = c
+	d.Ents[c.Name] = &fuse.Dirent{
+		Inode: c.Attrs.Inode,
+		Name:  c.Name,
+		Type:  c.FuseType(),
+	}
 
 	// Update the directory Mtime
 	d.Attrs.Mtime = time.Now()
 
 	// Update the file system state
 	d.fs.ndirs++
-
+	d.sync()
+	d.fs.sync()
 	// Log the directory creation and return the dir node
 	logger.Infof("mkdir %q in %q, mode %v", c.Name, d.Path(), req.Mode)
 	return c, nil
@@ -150,6 +164,7 @@ func (d *Node) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
 
 	// Delete the entry from the directory Children
 	delete(d.Children, req.Name)
+	delete(d.Ents, req.Name)
 
 	// Update the directory Mtime
 	d.Attrs.Mtime = time.Now()
@@ -160,7 +175,8 @@ func (d *Node) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
 	} else {
 		d.fs.nfiles--
 	}
-
+	d.sync()
+	d.fs.sync()
 	// Log the directory removal and return no error
 	logger.Infof("removed %q from %q", req.Name, d.Path())
 	return nil
@@ -205,11 +221,19 @@ func (d *Node) Rename(ctx context.Context, req *fuse.RenameRequest, newDir fs.No
 	node.Attrs.Mtime = time.Now()
 
 	dst.Children[req.NewName] = node // Add the entity to the new directory
+	dst.Ents[req.NewName] = &fuse.Dirent{
+		Inode: node.Attrs.Inode,
+		Name:  node.Name,
+		Type:  node.FuseType(),
+	}
 	dst.Attrs.Mtime = time.Now()
 
 	delete(dst.Children, req.OldName) // Delete the entity from the old directory
+	delete(dst.Ents, req.OldName)
 	d.Attrs.Mtime = time.Now()
-
+	d.sync()
+	node.sync()
+	d.fs.sync()
 	logger.Infof("moved %q from %q to %q", req.OldName, d.Path(), node.Path())
 	return nil
 }
@@ -233,9 +257,25 @@ func (d *Node) Lookup(ctx context.Context, name string) (fs.Node, error) {
 	d.Attrs.Atime = time.Now()
 
 	if ent, ok := d.Children[name]; ok {
-		logger.Debugf("lookup %s in %s", name, d.Path())
-
+		logger.Infof("lookup %s in %s", name, d.Path())
 		return ent, nil
+	}
+
+	if ent, ok := d.Ents[name]; ok {
+		if ndata, err := d.fs.kv.Get(filepath.Join(d.Path(), ent.Name)); err == nil {
+			if n, err := NodeFromBytes(ndata, d, d.fs); err == nil {
+				d.Children[ent.Name] = n
+				return n, nil
+			}
+		}
+		if ent.Type == fuse.DT_Dir {
+			n := NewDir(ent.Name, 0755, d, d.fs)
+			d.Children[ent.Name] = n
+			return n, nil
+		}
+		n := NewFile(ent.Name, 0644, d, d.fs)
+		d.Children[ent.Name] = n
+		return n, nil
 	}
 
 	logger.Debugf("(error) couldn't lookup %s in %s", name, d.Path())
@@ -269,16 +309,20 @@ func (d *Node) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	d.Attrs.Atime = time.Now()
 
 	// Create the Dirent response
-	for _, node := range d.Children {
-		dirent := fuse.Dirent{
-			Inode: node.Attrs.Inode,
-			Type:  node.FuseType(),
-			Name:  node.Name,
-		}
+	// for _, node := range d.Children {
+	// 	dirent := fuse.Dirent{
+	// 		Inode: node.Attrs.Inode,
+	// 		Type:  node.FuseType(),
+	// 		Name:  node.Name,
+	// 	}
 
-		contents = append(contents, dirent)
+	// 	contents = append(contents, dirent)
+	// }
+
+	for _, ent := range d.Ents {
+		contents = append(contents, *ent)
 	}
 
-	logger.Debug("read all for directory %s", d.Path())
+	logger.Infof("read all for directory %s, ents: %v", d.Path(), contents)
 	return contents, nil
 }

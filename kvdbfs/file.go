@@ -14,7 +14,7 @@ func NewFile(name string, mode os.FileMode, parent *Node, memfs *FileSystem) *No
 	f := NewNode(name, mode, parent, memfs)
 
 	// Make the data array
-	f.Data = make([]byte, 0, 0)
+	f.Data = make([]byte, 0)
 	return f
 }
 
@@ -90,6 +90,11 @@ func (f *Node) Flush(ctx context.Context, req *fuse.FlushRequest) error {
 
 	f.Attrs.Atime = time.Now()
 	f.Attrs.Mtime = f.Attrs.Atime
+
+	err := f.sync()
+	if err != nil {
+		return err
+	}
 	f.dirty = false
 
 	return nil
@@ -104,17 +109,17 @@ func (f *Node) Flush(ctx context.Context, req *fuse.FlushRequest) error {
 //
 // https://godoc.org/bazil.org/fuse/fs#HandleReadAller
 // NOTE: Do not implement
-// func (f *File) ReadAll(ctx context.Context) ([]byte, error) {
-// 	f.fs.Lock()
-// 	defer f.fs.Unlock()
-//
-// 	// Set the access time on the file.
-// 	f.Attrs.Atime = time.Now()
-//
-// 	// Return the data with no error.
-// 	logger.Debug("read all file %d", f.ID)
-// 	return f.Data, nil
-// }
+func (f *Node) ReadAll(ctx context.Context) ([]byte, error) {
+	f.fs.Lock()
+	defer f.fs.Unlock()
+
+	// Set the access time on the file.
+	f.Attrs.Atime = time.Now()
+
+	// Return the data with no error.
+	logger.Infof("read all file %d", f.ID)
+	return f.Data, nil
+}
 
 // Read requests to read data from the handle.
 //
@@ -127,25 +132,19 @@ func (f *Node) Flush(ctx context.Context, req *fuse.FlushRequest) error {
 // even attempted (except in OpenDirectIO mode).
 //
 // https://godoc.org/bazil.org/fuse/fs#HandleReader
-func (f *Node) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
-	f.fs.Lock()
-	defer f.fs.Unlock()
+// func (f *Node) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
+// 	f.fs.Lock()
+// 	defer f.fs.Unlock()
 
-	// Find the end of the data slice to return.
-	to := uint64(req.Offset) + uint64(req.Size)
-	if to > f.Attrs.Size {
-		to = f.Attrs.Size
-	}
+// 	// Set the access time on the file.
+// 	f.Attrs.Atime = time.Now()
 
-	// Set the access time on the file.
-	f.Attrs.Atime = time.Now()
+// 	// Set the data on the response object.
+// 	resp.Data = []byte("ooh!")
 
-	// Set the data on the response object.
-	resp.Data = f.Data[req.Offset:to]
-
-	logger.Debugf("read %d bytes from offset %d in file %d", req.Size, req.Offset, f.ID)
-	return nil
-}
+// 	logger.Infof("read %d bytes from offset %d in file %d", req.Size, req.Offset, f.ID)
+// 	return nil
+// }
 
 // Release the handle to the file. No associated documentation.
 //

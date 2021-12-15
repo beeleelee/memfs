@@ -3,6 +3,7 @@
 package kvdbfs
 
 import (
+	"encoding/json"
 	"os"
 	"sync"
 
@@ -10,6 +11,7 @@ import (
 	"bazil.org/fuse/fs"
 	"github.com/bbengfort/sequence"
 	logging "github.com/ipfs/go-log/v2"
+	"golang.org/x/xerrors"
 )
 
 var logger = logging.Logger("kvdbfs")
@@ -20,7 +22,8 @@ var logger = logging.Logger("kvdbfs")
 
 // New MemFS file system created from a mount path and a configuration. This
 // is the entry point for creating and launching all in-memory file systems.
-func New(mount string, config *Config) *FileSystem {
+func New(mount string, config *Config) (*FileSystem, error) {
+	var err error
 	// Set the Log Level
 	if config.LogLevel != "" {
 		logging.SetLogLevelRegex("^kvdbfs", config.LogLevel)
@@ -39,11 +42,46 @@ func New(mount string, config *Config) *FileSystem {
 	// Set other system flags from the configuration
 	fs.readonly = fs.Config.ReadOnly
 
-	// Create the root directory
-	fs.root = NewDir("/", 0755, nil, fs)
+	fs.kv, err = NewNutsdbStore(config)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("db inited")
+	logger.Infof("fs root: %s", fs.Config.MetaStore.FSRoot)
+	if rdata, err := fs.kv.Get(fs.Config.MetaStore.FSRoot); err == nil {
+		fsroot, err := NodeFromBytes(rdata, nil, fs)
+		if err != nil {
+			return nil, err
+		}
+		if !fsroot.IsDir() {
+			return nil, xerrors.Errorf("invalid fs root")
+		}
+		fs.root = fsroot
+		if infod, err := fs.kv.Get(fs.Config.MetaStore.FSInfo); err == nil {
+			fsinfo := &FSInfo{}
+			if err := json.Unmarshal(infod, fsinfo); err == nil {
+				logger.Info(*fsinfo)
+				fs.nbytes = fsinfo.NBytes
+				fs.ndirs = fsinfo.NDirs
+				fs.nfiles = fsinfo.NFiles
+				fs.Sequence, _ = sequence.New(fsinfo.NFiles+fsinfo.NDirs, sequence.MaximumBound, 1)
+			}
+		}
+
+	} else {
+		fs.root = NewDir("/", 0755, nil, fs)
+		// fs.root.sync()
+		logger.Info("could not found fs root")
+	}
 
 	// Return the file system
-	return fs
+	return fs, nil
+}
+
+type FSInfo struct {
+	NFiles uint64
+	NDirs  uint64
+	NBytes uint64
 }
 
 //===========================================================================
@@ -65,6 +103,7 @@ type FileSystem struct {
 	ndirs      uint64             // The number of directories in the file system
 	nbytes     uint64             // The amount of data in the file system
 	readonly   bool               // If the file system is readonly or not
+	kv         MetaStore
 }
 
 // Run the FileSystem, mounting the MountPoint and connecting to FUSE
@@ -163,4 +202,17 @@ func (mfs *FileSystem) Destroy() {
 // inode values used for dynamic inodes.
 func (mfs *FileSystem) GenerateInode(parentInode uint64, name string) uint64 {
 	return fs.GenerateDynamicInode(parentInode, name)
+}
+
+func (mfs *FileSystem) sync() error {
+	fsinfo := &FSInfo{
+		NFiles: mfs.nfiles,
+		NDirs:  mfs.ndirs,
+		NBytes: mfs.nbytes,
+	}
+	d, err := json.Marshal(fsinfo)
+	if err != nil {
+		return err
+	}
+	return mfs.kv.Put(mfs.Config.MetaStore.FSInfo, d)
 }
